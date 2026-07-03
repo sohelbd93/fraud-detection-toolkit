@@ -1,0 +1,22 @@
+# Core streaming / online ML
+kafka-python==2.0.2
+river==0.21.0
+
+# Batch ML
+scikit-learn==1.5.1
+xgboost==2.1.1
+torch==2.3.1
+pandas==2.2.2
+numpy==1.26.4
+
+# API / dashboard
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+streamlit==1.37.0
+
+# Evaluation / experiment tracking
+mlflow==2.14.1
+matplotlib==3.9.0
+
+# Dev
+pytest==8.2.2
