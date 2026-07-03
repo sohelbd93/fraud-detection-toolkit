@@ -1,109 +1,80 @@
-# Cyber Threat Sentinel
+# Fraud Detection Toolkit
 
-An open-source, real-time network threat detection system combining streaming
-anomaly detection with periodic batch classification, benchmarked on public
-intrusion-detection datasets (CICIDS2017 / UNSW-NB15).
+Two standalone financial-fraud detection scripts combining rule-based red
+flags with unsupervised anomaly scoring (Isolation Forest), plus a blended
+risk score for analyst triage.
 
-> **What this is:** a research/demo-grade reference architecture for
-> real-time ML-based network intrusion detection, released for the security
-> and applied-ML community to learn from, benchmark against, and extend.
->
-> **What this is not:** a production SOC replacement, and it is **not**
-> trained or validated on real bank, payment-network, or utility traffic.
-> All training/evaluation data is public benchmark data or synthetic traffic
-> generated for demo purposes. Do not deploy against live infrastructure
-> without your own security review, red-teaming, and compliance sign-off.
+> **Scope note:** these are research/demo-grade reference implementations,
+> trained and evaluated on synthetic data generated in-script. They are not
+> certified AML/compliance systems and do not replace a bank's BSA/AML
+> program or adult-protective-services reporting workflows. Do not point
+> these at real customer data without your own compliance, privacy, and
+> security review.
 
-## Architecture
+## Scripts
 
-```
-[Traffic Source]        synthetic generator, PCAP replay, or live capture
-       |
-       v
-   [Kafka topic: raw-flows]
-       |
-       v
-[Streaming feature pipeline]   Faust/Flink: windowing, flow feature extraction
-       |
-       v
-[Online detection model]        river (Half-Space Trees / Adaptive Random Forest)
-       |                        scores every flow in near real time
-       v
-   [Kafka topic: alerts] --------------------------+
-       |                                            |
-       v                                            v
-[Batch re-scoring model]                    [FastAPI alert feed]
-  XGBoost / PyTorch autoencoder,                    |
-  trained offline on CICIDS2017,                    v
-  periodically re-scores flagged                [Dashboard]
-  events for higher precision
-       |
-       v
-[Model registry + evaluation reports]
-```
+### `aml_detection.py` — Anti-Money Laundering transaction monitoring
+Detects classic AML red flags and blends them with an anomaly model:
+- **Structuring/smurfing** — deposits just under the $10,000 CTR threshold
+- **Round-number transactions** — suspiciously round amounts
+- **High velocity** — accounts with abnormally many transactions in a
+  rolling 24h window
+- **Rapid movement / layering** — funds received and moved out again to a
+  different counterparty within 72h
+- Outputs a blended `risk_score` and flags the top ~3% as `sar_candidate`
+  (Suspicious Activity Report candidates)
 
-Two-tier design rationale: a pure streaming model gets you speed but weak
-precision; a pure batch model gets you accuracy but no real-time claim.
-Combining them mirrors how production tooling (e.g. Zeek + ML scoring) is
-typically structured, while staying honest about each tier's tradeoffs.
+### `elder_fraud_protection.py` — Elder financial exploitation detection
+Detects patterns disproportionately associated with financial abuse of
+older adults:
+- **New payee, large transfer** — first-ever transfer to a payee, above a
+  threshold, within days of that payee first appearing (common opener for
+  romance scams, tech-support scams, caregiver abuse)
+- **Sudden large withdrawal** — far above the account's own historical
+  transaction size
+- **Off-hours activity** — transactions outside the account's typical
+  active hours
+- **Repeated below-threshold transfers** — many transfers to the same
+  payee, each individually below a review threshold (pattern consistent
+  with deliberately avoiding scrutiny)
+- Outputs a blended `risk_score` and flags the top ~3% as `review_candidate`
 
-## Datasets
-
-- **CICIDS2017 / CSE-CIC-IDS2018** — primary benchmark, labeled flow-level
-  CSVs (CICFlowMeter features) plus raw PCAP.
-- **UNSW-NB15** — secondary validation set with a different feature
-  extraction methodology, used to check the model isn't just overfitting to
-  CICIDS's specific artifacts.
-- **Synthetic generator** (`ingestion/synthetic_flow_generator.py`) — for
-  quick local demos without downloading the full datasets.
-
-Datasets are not vendored in this repo (large + licensing). See
-`data/README.md` for download instructions.
-
-## Repo layout
-
-| Path | Purpose |
-|---|---|
-| `ingestion/` | Kafka producers: synthetic flow generator, PCAP replay, live capture |
-| `streaming/` | Feature windowing + online model scoring job |
-| `models/online/` | River-based incremental anomaly/classification models |
-| `models/batch/` | PyTorch autoencoder + XGBoost classifier, training scripts |
-| `models/registry/` | Versioned model artifacts, MLflow tracking config |
-| `detection_engine/` | Scoring orchestration, thresholding, alert generation |
-| `api/` | FastAPI service: alert feed, model metrics, health |
-| `dashboard/` | Lightweight Streamlit dashboard for live alerts |
-| `evaluation/` | Benchmark scripts + metrics reports against CICIDS/UNSW-NB15 |
-| `docs/` | Architecture notes, threat model, dataset notes |
-
-## Quickstart
+## Usage
 
 ```bash
-docker-compose up -d          # Kafka + Zookeeper + API + dashboard
 pip install -r requirements.txt
-python ingestion/synthetic_flow_generator.py     # start producing demo traffic
-python streaming/online_scorer.py                # start online scoring
-uvicorn api.main:app --reload                    # alert API on :8000
-streamlit run dashboard/app.py                   # live dashboard on :8501
+
+# Run on generated synthetic data
+python aml_detection.py --demo
+python elder_fraud_protection.py --demo
+
+# Score your own transaction CSV
+python aml_detection.py --input transactions.csv
+python elder_fraud_protection.py --input transactions.csv
 ```
 
-## Roadmap
+**Required CSV columns:**
+- `aml_detection.py`: `transaction_id, account_id, counterparty_id, timestamp, direction, amount`
+- `elder_fraud_protection.py`: `transaction_id, account_id, payee_id, timestamp, amount`
 
-- [x] Repo scaffold, synthetic data generator, online model stub
-- [ ] Kafka producer for CICIDS2017 flow replay
-- [ ] Faust streaming feature pipeline
-- [ ] River online model wired end-to-end
-- [ ] XGBoost/autoencoder batch classifier + evaluation report
-- [ ] FastAPI alert feed
-- [ ] Streamlit dashboard
-- [ ] Benchmark results published in `evaluation/results.md`
+Output is written alongside the input as `<input>_scored.csv`.
+
+## How the risk score works
+
+Each script runs a rule engine first (fast, explainable, auditable — the
+kind of logic a compliance team can review line by line), then trains an
+Isolation Forest on engineered features (transaction amount, per-account
+z-score, hour of day, rule-flag count) to catch anomalies the fixed rules
+miss. The two signals are blended into a single `risk_score` so results can
+be sorted for analyst review rather than treated as a hard yes/no.
 
 ## License
 
-MIT (see `LICENSE`). Contributions welcome — see `CONTRIBUTING.md`.
+MIT — see `LICENSE`.
 
 ## Responsible use
 
-This project is for research, education, and defensive security tooling.
-It must not be used to build offensive tooling, evade detection systems, or
-target systems you don't own or have authorization to test. See
-`SECURITY.md` for the disclosure policy.
+Intended for fraud-research, education, and prototyping by banks, credit
+unions, and consumer-protection tooling teams. Do not use to test against
+real customer accounts without authorization, and do not use for building
+tools that facilitate evading fraud detection.
